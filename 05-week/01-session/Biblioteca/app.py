@@ -1,1 +1,211 @@
-{"nbformat":4,"nbformat_minor":0,"metadata":{"colab":{"provenance":[],"authorship_tag":"ABX9TyN8vCm/Jo16aug+hX422G5L"},"kernelspec":{"name":"python3","display_name":"Python 3"},"language_info":{"name":"python"}},"cells":[{"cell_type":"code","execution_count":14,"metadata":{"colab":{"base_uri":"https://localhost:8080/"},"collapsed":true,"id":"OQuIy7RTsCFS","executionInfo":{"status":"ok","timestamp":1757219306972,"user_tz":300,"elapsed":4374,"user":{"displayName":"Andry kahory Vieda trujillo","userId":"11159778211510694030"}},"outputId":"83724153-08dd-44be-b169-a7a348028fd7"},"outputs":[{"output_type":"stream","name":"stdout","text":["\n","====== Biblioteca Persistente ======\n","1. Registrar socio\n","2. Listar socios\n","3. Registrar material\n","4. Listar materiales\n","5. Prestar\n","6. Devolver\n","7. Reporte: Activos\n","8. Reporte: Vencidos\n","0. Salir\n","====================================\n","\n","Opción: 0\n","¡Sesion finalizada!\n"]}],"source":["import json\n","from dataclasses import dataclass, asdict\n","from datetime import datetime, timedelta\n","from pathlib import Path\n","\n","# ===================== Configuración =====================\n","ARCHIVO_SOCIOS = Path(\"socios.json\")\n","ARCHIVO_MATERIALES = Path(\"materiales.json\")\n","ARCHIVO_PRESTAMOS = Path(\"prestamos.json\")\n","\n","DIAS_LIMITE = 7\n","MULTA_DIA = 1500\n","\n","\n","# ===================== Modelos =====================\n","@dataclass\n","class Socio:\n","    documento: str\n","    nombre: str\n","\n","\n","@dataclass\n","class Material:\n","    titulo: str\n","    categoria: str\n","    stock: int\n","\n","\n","@dataclass\n","class Prestamo:\n","    doc: str\n","    titulo: str\n","    fecha: str   # guardamos como string para JSON\n","\n","\n","# ===================== Persistencia =====================\n","class BaseDatos:\n","    def __init__(self):\n","        self.socios: list[Socio] = []\n","        self.materiales: list[Material] = []\n","        self.prestamos: list[Prestamo] = []\n","        self.cargar_datos()\n","\n","    def cargar_datos(self):\n","        if ARCHIVO_SOCIOS.exists():\n","            self.socios = [Socio(**d) for d in json.loads(ARCHIVO_SOCIOS.read_text())]\n","        if ARCHIVO_MATERIALES.exists():\n","            self.materiales = [Material(**d) for d in json.loads(ARCHIVO_MATERIALES.read_text())]\n","        if ARCHIVO_PRESTAMOS.exists():\n","            self.prestamos = [Prestamo(**d) for d in json.loads(ARCHIVO_PRESTAMOS.read_text())]\n","\n","    def guardar_datos(self):\n","        ARCHIVO_SOCIOS.write_text(json.dumps([asdict(s) for s in self.socios], indent=2, ensure_ascii=False))\n","        ARCHIVO_MATERIALES.write_text(json.dumps([asdict(m) for m in self.materiales], indent=2, ensure_ascii=False))\n","        ARCHIVO_PRESTAMOS.write_text(json.dumps([asdict(p) for p in self.prestamos], indent=2, ensure_ascii=False))\n","\n","\n","# ===================== Lógica de negocio =====================\n","class GestorPrestamos:\n","    def __init__(self, db: BaseDatos):\n","        self.db = db\n","\n","    def registrar_socio(self, nombre, doc):\n","        if any(s.documento == doc for s in self.db.socios):\n","            raise ValueError(\"Ya existe un socio con ese documento.\")\n","        self.db.socios.append(Socio(doc, nombre))\n","        self.db.guardar_datos()\n","\n","    def registrar_material(self, titulo, categoria, stock):\n","        if any(m.titulo == titulo for m in self.db.materiales):\n","            raise ValueError(\"Ese material ya existe.\")\n","        self.db.materiales.append(Material(titulo, categoria, stock))\n","        self.db.guardar_datos()\n","\n","    def prestar(self, doc, titulo):\n","        socio = next((s for s in self.db.socios if s.documento == doc), None)\n","        if not socio:\n","            raise ValueError(\"El socio no existe.\")\n","\n","        material = next((m for m in self.db.materiales if m.titulo == titulo), None)\n","        if not material:\n","            raise ValueError(\"El material no existe.\")\n","        if material.stock <= 0:\n","            raise ValueError(\"Sin ejemplares disponibles.\")\n","\n","        material.stock -= 1\n","        self.db.prestamos.append(Prestamo(doc, titulo, datetime.now().isoformat()))\n","        self.db.guardar_datos()\n","\n","    def devolver(self, doc, titulo):\n","        prestamo = next((p for p in self.db.prestamos if p.doc == doc and p.titulo == titulo), None)\n","        if not prestamo:\n","            raise ValueError(\"Ese préstamo no existe.\")\n","\n","        self.db.prestamos.remove(prestamo)\n","        material = next(m for m in self.db.materiales if m.titulo == titulo)\n","        material.stock += 1\n","        self.db.guardar_datos()\n","\n","        return self.calcular_multa(prestamo)\n","\n","    def calcular_multa(self, prestamo: Prestamo):\n","        fecha_prestamo = datetime.fromisoformat(prestamo.fecha)\n","        limite = fecha_prestamo + timedelta(days=DIAS_LIMITE)\n","        hoy = datetime.now()\n","        if hoy <= limite:\n","            return 0\n","        atraso = (hoy - limite).days\n","        return atraso * MULTA_DIA\n","\n","    def prestamos_activos(self):\n","        return self.db.prestamos\n","\n","    def prestamos_vencidos(self):\n","        vencidos = []\n","        for p in self.db.prestamos:\n","            multa = self.calcular_multa(p)\n","            if multa > 0:\n","                vencidos.append((p, multa))\n","        return vencidos\n","\n","\n","# ===================== Interfaz CLI =====================\n","def pedir_texto(msg):\n","    return input(msg).strip()\n","\n","\n","def pedir_numero(msg):\n","    while True:\n","        try:\n","            return int(input(msg))\n","        except ValueError:\n","            print(\"Debe ser un número válido.\")\n","\n","\n","def menu():\n","    print(\"\"\"\n","====== Biblioteca Persistente ======\n","1. Registrar socio\n","2. Listar socios\n","3. Registrar material\n","4. Listar materiales\n","5. Prestar\n","6. Devolver\n","7. Reporte: Activos\n","8. Reporte: Vencidos\n","0. Salir\n","====================================\n","\"\"\")\n","\n","\n","def main():\n","    db = BaseDatos()\n","    gestor = GestorPrestamos(db)\n","\n","    while True:\n","        menu()\n","        op = pedir_texto(\"Opción: \")\n","\n","        try:\n","            if op == \"1\":\n","                nombre = pedir_texto(\"Nombre: \")\n","                doc = pedir_texto(\"Documento: \")\n","                gestor.registrar_socio(nombre, doc)\n","                print(\"✔ Socio agregado.\")\n","            elif op == \"2\":\n","                for s in db.socios:\n","                    print(f\"- {s.nombre} (doc {s.documento})\")\n","            elif op == \"3\":\n","                titulo = pedir_texto(\"Título: \")\n","                cat = pedir_texto(\"Categoría (Libro/Revista): \")\n","                stock = pedir_numero(\"Cantidad: \")\n","                gestor.registrar_material(titulo, cat, stock)\n","                print(\"✔ Material registrado.\")\n","            elif op == \"4\":\n","                for m in db.materiales:\n","                    print(f\"- {m.categoria}: {m.titulo} (stock: {m.stock})\")\n","            elif op == \"5\":\n","                doc = pedir_texto(\"Documento socio: \")\n","                titulo = pedir_texto(\"Título: \")\n","                gestor.prestar(doc, titulo)\n","                print(\"✔ Préstamo realizado.\")\n","            elif op == \"6\":\n","                doc = pedir_texto(\"Documento socio: \")\n","                titulo = pedir_texto(\"Título: \")\n","                multa = gestor.devolver(doc, titulo)\n","                print(f\"✔ Devolución registrada. Multa: ${multa}\")\n","            elif op == \"7\":\n","                if not db.prestamos:\n","                    print(\"(sin préstamos)\")\n","                for p in db.prestamos:\n","                    socio = next(s for s in db.socios if s.documento == p.doc)\n","                    print(f\"- {socio.nombre} tiene '{p.titulo}' desde {p.fecha[:10]}\")\n","            elif op == \"8\":\n","                vencidos = gestor.prestamos_vencidos()\n","                if not vencidos:\n","                    print(\"(sin vencidos)\")\n","                for p, multa in vencidos:\n","                    socio = next(s for s in db.socios if s.documento == p.doc)\n","                    print(f\"- {socio.nombre} debe '{p.titulo}' con multa de ${multa}\")\n","            elif op == \"0\":\n","                print(\"¡Sesion finalizada!\")\n","                break\n","            else:\n","                print(\"Opción inválida.\")\n","        except Exception as e:\n","            print(f\"✖ Error: {e}\")\n","\n","\n","if __name__ == \"__main__\":\n","    main()\n"]}]}
+import json
+from dataclasses import dataclass, asdict
+from datetime import datetime, timedelta
+from pathlib import Path
+
+# ===================== Configuración =====================
+ARCHIVO_SOCIOS = Path("socios.json")
+ARCHIVO_MATERIALES = Path("materiales.json")
+ARCHIVO_PRESTAMOS = Path("prestamos.json")
+
+DIAS_LIMITE = 7
+MULTA_DIA = 1500
+
+
+# ===================== Modelos =====================
+@dataclass
+class Socio:
+    documento: str
+    nombre: str
+
+
+@dataclass
+class Material:
+    titulo: str
+    categoria: str
+    stock: int
+
+
+@dataclass
+class Prestamo:
+    doc: str
+    titulo: str
+    fecha: str   # guardamos como string para JSON
+
+
+# ===================== Persistencia =====================
+class BaseDatos:
+    def __init__(self):
+        self.socios: list[Socio] = []
+        self.materiales: list[Material] = []
+        self.prestamos: list[Prestamo] = []
+        self.cargar_datos()
+
+    def cargar_datos(self):
+        if ARCHIVO_SOCIOS.exists():
+            self.socios = [Socio(**d) for d in json.loads(ARCHIVO_SOCIOS.read_text())]
+        if ARCHIVO_MATERIALES.exists():
+            self.materiales = [Material(**d) for d in json.loads(ARCHIVO_MATERIALES.read_text())]
+        if ARCHIVO_PRESTAMOS.exists():
+            self.prestamos = [Prestamo(**d) for d in json.loads(ARCHIVO_PRESTAMOS.read_text())]
+
+    def guardar_datos(self):
+        ARCHIVO_SOCIOS.write_text(json.dumps([asdict(s) for s in self.socios], indent=2, ensure_ascii=False))
+        ARCHIVO_MATERIALES.write_text(json.dumps([asdict(m) for m in self.materiales], indent=2, ensure_ascii=False))
+        ARCHIVO_PRESTAMOS.write_text(json.dumps([asdict(p) for p in self.prestamos], indent=2, ensure_ascii=False))
+
+
+# ===================== Lógica de negocio =====================
+class GestorPrestamos:
+    def __init__(self, db: BaseDatos):
+        self.db = db
+
+    def registrar_socio(self, nombre, doc):
+        if any(s.documento == doc for s in self.db.socios):
+            raise ValueError("Ya existe un socio con ese documento.")
+        self.db.socios.append(Socio(doc, nombre))
+        self.db.guardar_datos()
+
+    def registrar_material(self, titulo, categoria, stock):
+        if any(m.titulo == titulo for m in self.db.materiales):
+            raise ValueError("Ese material ya existe.")
+        self.db.materiales.append(Material(titulo, categoria, stock))
+        self.db.guardar_datos()
+
+    def prestar(self, doc, titulo):
+        socio = next((s for s in self.db.socios if s.documento == doc), None)
+        if not socio:
+            raise ValueError("El socio no existe.")
+
+        material = next((m for m in self.db.materiales if m.titulo == titulo), None)
+        if not material:
+            raise ValueError("El material no existe.")
+        if material.stock <= 0:
+            raise ValueError("Sin ejemplares disponibles.")
+
+        material.stock -= 1
+        self.db.prestamos.append(Prestamo(doc, titulo, datetime.now().isoformat()))
+        self.db.guardar_datos()
+
+    def devolver(self, doc, titulo):
+        prestamo = next((p for p in self.db.prestamos if p.doc == doc and p.titulo == titulo), None)
+        if not prestamo:
+            raise ValueError("Ese préstamo no existe.")
+
+        self.db.prestamos.remove(prestamo)
+        material = next(m for m in self.db.materiales if m.titulo == titulo)
+        material.stock += 1
+        self.db.guardar_datos()
+
+        return self.calcular_multa(prestamo)
+
+    def calcular_multa(self, prestamo: Prestamo):
+        fecha_prestamo = datetime.fromisoformat(prestamo.fecha)
+        limite = fecha_prestamo + timedelta(days=DIAS_LIMITE)
+        hoy = datetime.now()
+        if hoy <= limite:
+            return 0
+        atraso = (hoy - limite).days
+        return atraso * MULTA_DIA
+
+    def prestamos_activos(self):
+        return self.db.prestamos
+
+    def prestamos_vencidos(self):
+        vencidos = []
+        for p in self.db.prestamos:
+            multa = self.calcular_multa(p)
+            if multa > 0:
+                vencidos.append((p, multa))
+        return vencidos
+
+
+# ===================== Interfaz CLI =====================
+def pedir_texto(msg):
+    return input(msg).strip()
+
+
+def pedir_numero(msg):
+    while True:
+        try:
+            return int(input(msg))
+        except ValueError:
+            print("Debe ser un número válido.")
+
+
+def menu():
+    print("""
+====== Biblioteca Persistente ======
+1. Registrar socio
+2. Listar socios
+3. Registrar material
+4. Listar materiales
+5. Prestar
+6. Devolver
+7. Reporte: Activos
+8. Reporte: Vencidos
+0. Salir
+====================================
+""")
+
+
+def main():
+    db = BaseDatos()
+    gestor = GestorPrestamos(db)
+
+    while True:
+        menu()
+        op = pedir_texto("Opción: ")
+
+        try:
+            if op == "1":
+                nombre = pedir_texto("Nombre: ")
+                doc = pedir_texto("Documento: ")
+                gestor.registrar_socio(nombre, doc)
+                print("✔ Socio agregado.")
+            elif op == "2":
+                for s in db.socios:
+                    print(f"- {s.nombre} (doc {s.documento})")
+            elif op == "3":
+                titulo = pedir_texto("Título: ")
+                cat = pedir_texto("Categoría (Libro/Revista): ")
+                stock = pedir_numero("Cantidad: ")
+                gestor.registrar_material(titulo, cat, stock)
+                print("✔ Material registrado.")
+            elif op == "4":
+                for m in db.materiales:
+                    print(f"- {m.categoria}: {m.titulo} (stock: {m.stock})")
+            elif op == "5":
+                doc = pedir_texto("Documento socio: ")
+                titulo = pedir_texto("Título: ")
+                gestor.prestar(doc, titulo)
+                print("✔ Préstamo realizado.")
+            elif op == "6":
+                doc = pedir_texto("Documento socio: ")
+                titulo = pedir_texto("Título: ")
+                multa = gestor.devolver(doc, titulo)
+                print(f"✔ Devolución registrada. Multa: ${multa}")
+            elif op == "7":
+                if not db.prestamos:
+                    print("(sin préstamos)")
+                for p in db.prestamos:
+                    socio = next(s for s in db.socios if s.documento == p.doc)
+                    print(f"- {socio.nombre} tiene '{p.titulo}' desde {p.fecha[:10]}")
+            elif op == "8":
+                vencidos = gestor.prestamos_vencidos()
+                if not vencidos:
+                    print("(sin vencidos)")
+                for p, multa in vencidos:
+                    socio = next(s for s in db.socios if s.documento == p.doc)
+                    print(f"- {socio.nombre} debe '{p.titulo}' con multa de ${multa}")
+            elif op == "0":
+                print("¡Sesion finalizada!")
+                break
+            else:
+                print("Opción inválida.")
+        except Exception as e:
+            print(f"✖ Error: {e}")
+
+
+if __name__ == "__main__":
+    main()
